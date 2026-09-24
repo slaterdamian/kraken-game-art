@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kraken Game Art</title>
+<style>
+  :root {
+    --bg: #000;
+    --fg: #f4f4f5;
+    --muted: #a1a1aa;
+    --panel: #18181b;
+    --line: #3f3f46;
+    --accent: #8b5cf6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+
+  /* ---------- the display (square canvas, device masks it to a circle) ---------- */
+  #screen { position: relative; width: 100vmin; height: 100vmin; container-type: size; margin: auto;
+    overflow: hidden; background: #000; }
+  .layer { position: absolute; inset: 0; transition: opacity .8s ease; }
+  .layer.hidden { opacity: 0; }
+
+  #bg { background-size: cover; background-position: center;
+    filter: blur(4cqmin) brightness(.45) saturate(1.3); transform: scale(1.2); }
+  #fg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -54%);
+    max-width: 50%; max-height: 66%; border-radius: 2cqmin;
+    box-shadow: 0 3cqmin 8cqmin rgba(0,0,0,.7); }
+  #fg.square { width: 58%; max-width: none; max-height: none; }
+
+  /* style=fill: art fills the whole circle */
+  body.fill #fg { max-width: none; max-height: none; width: 100%; height: 100%;
+    object-fit: cover; border-radius: 0; transform: none; left: 0; top: 0; box-shadow: none; }
+  /* style=logo: hero banner background + transparent logo */
+  body.logo #bg { filter: brightness(.6); transform: none; }
+  body.logo #fg { max-width: 62%; max-height: 34%; box-shadow: none; border-radius: 0;
+    transform: translate(-50%, -50%); filter: drop-shadow(0 1cqmin 3cqmin rgba(0,0,0,.8)); }
+
+  #info { position: absolute; left: 50%; bottom: 9%; transform: translateX(-50%);
+    max-width: 62%; text-align: center; padding: 1.2cqmin 3.5cqmin; border-radius: 99px;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(2cqmin); white-space: nowrap; }
+  #info .name { font-size: 4.2cqmin; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  #info .sub { font-size: 3.2cqmin; color: var(--muted); font-variant-numeric: tabular-nums; }
+  body.fill #info, body.noinfo #info { display: none; }
+
+  #idle { display: grid; place-items: center; text-align: center; }
+  #idle .clock { font-size: 20cqmin; font-weight: 200; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; }
+  #idle .date { font-size: 4.5cqmin; color: var(--muted); margin-top: 1cqmin; }
+
+  #textcard { display: grid; place-items: center; text-align: center; padding: 18%;
+    font-size: 8cqmin; font-weight: 600; line-height: 1.1;
+    background: radial-gradient(circle at 50% 40%, #312e81, #000 75%); }
+
+  /* ---------- setup / preview page (shown when not on the Kraken) ---------- */
+  body.setup { overflow: auto; }
+  body.setup main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px;
+    display: grid; gap: 24px; grid-template-columns: 1fr; }
+  @media (min-width: 640px) { body.setup main { grid-template-columns: 1fr 280px; } }
+  body.setup h1 { font-size: 20px; }
+  body.setup p, body.setup li { color: var(--muted); font-size: 14px; line-height: 1.5; }
+  body.setup ol { padding-left: 20px; display: grid; gap: 4px; }
+  body.setup a { color: #c4b5fd; }
+  .form { display: grid; gap: 12px; }
+  .form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  .form input, .form select { background: var(--panel); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  .form .check { display: flex; gap: 8px; align-items: center; }
+  .url { display: flex; gap: 8px; }
+  .url input { flex: 1; min-width: 0; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 14px; font: inherit; cursor: pointer; }
+  #status { font-size: 12px; color: var(--muted); }
+  .preview-wrap { display: grid; gap: 8px; justify-items: center; align-content: start; }
+  body.setup #screen { width: 260px; height: 260px; border-radius: 50%;
+    box-shadow: 0 0 0 6px #27272a, 0 0 0 7px #3f3f46; }
+  body:not(.setup) main > section:first-child { display: none; }
+  body:not(.setup) main, body:not(.setup) .preview-wrap { display: contents; }
+  body:not(.setup) .preview-wrap > p { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h1>Kraken Game Art</h1>
+    <p style="margin:6px 0 16px">Shows the art of whatever game Discord says you're playing on your NZXT Kraken screen.</p>
+    <ol>
+      <li>Join the <a href="https://discord.gg/lanyard" target="_blank" rel="noopener">Lanyard Discord server</a> (it's how this page can see your activity).</li>
+      <li>In Discord: <b>Settings → Activity Privacy → Share your detected activities</b> on.</li>
+      <li>Get your user ID: <b>Settings → Advanced → Developer Mode</b>, then right-click your name → <b>Copy User ID</b>.</li>
+      <li>Fill in below, copy the URL, and paste it into <b>NZXT CAM → Lighting / LCD → Web Integration</b>.</li>
+    </ol>
+    <div class="form" style="margin-top:16px">
+      <label>Discord user ID <input id="f-user" inputmode="numeric" placeholder="123456789012345678"></label>
+      <label>Style
+        <select id="f-style">
+          <option value="cover">Cover: box art on blurred background</option>
+          <option value="fill">Fill: art fills the whole screen</option>
+          <option value="logo">Logo: game logo over banner art (Steam games)</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="f-info" checked> Show game name and play time</label>
+      <label class="check"><input type="checkbox" id="f-music"> Show Spotify album art when not playing a game</label>
+      <label>URL for NZXT CAM
+        <span class="url"><input id="f-url" readonly><button id="copy" type="button">Copy</button></span>
+      </label>
+      <div id="status">Enter your user ID to start.</div>
+    </div>
+  </section>
+
+  <div class="preview-wrap">
+    <div id="screen">
+      <div id="idle" class="layer"><div><div class="clock"></div><div class="date"></div></div></div>
+      <div id="textcard" class="layer hidden"></div>
+      <div id="art" class="layer hidden">
+        <div id="bg" class="layer"></div>
+        <img id="fg" alt="">
+        <div id="info"><div class="name"></div><div class="sub"></div></div>
+      </div>
+    </div>
+    <p>Live preview</p>
+  </div>
+</main>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const onKraken = params.get("kraken") === "1";
+  const store = {
+    get(k) { try { return localStorage.getItem("kga." + k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem("kga." + k, v); } catch {} },
+  };
+  // URL params win; fall back to what was saved on the setup page.
+  const cfg = {
+    user:  params.get("user")  ?? store.get("user")  ?? "",
+    style: params.get("style") ?? store.get("style") ?? "cover",
+    info:  (params.get("info")  ?? store.get("info")  ?? "1") !== "0",
+    music: (params.get("music") ?? store.get("music") ?? "0") === "1",
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const els = { idle: $("idle"), text: $("textcard"), art: $("art"), bg: $("bg"), fg: $("fg"),
+    name: document.querySelector("#info .name"), sub: document.querySelector("#info .sub") };
+
+  // ---------------- art resolution ----------------
+  const appCache = new Map();
+  async function discordApp(id) {
+    if (!id) return null;
+    if (!appCache.has(id)) {
+      appCache.set(id, fetch(`https://discord.com/api/v10/applications/${id}/rpc`)
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null));
+    }
+    return appCache.get(id);
+  }
+
+  function rpAsset(appId, key) {
+    if (!key) return null;
+    if (key.startsWith("mp:")) return `https://media.discordapp.net/${key.slice(3)}`;
+    if (key.startsWith("spotify:")) return `https://i.scdn.co/image/${key.slice(8)}`;
+    if (/^\d+$/.test(key) && appId) return `https://cdn.discordapp.com/app-assets/${appId}/${key}.png?size=1024`;
+    return null;
+  }
+
+  // Returns { fg: [candidate urls], bg: [candidate urls] } for a game activity.
+  async function artFor(act) {
+    const app = await discordApp(act.application_id);
+    const steam = app?.third_party_skus?.find((s) => s.distributor === "steam")?.id;
+    const S = (f) => `https://shared.steamstatic.com/store_item_assets/steam/apps/${steam}/${f}`;
+    const D = (h) => h && `https://cdn.discordapp.com/app-icons/${act.application_id}/${h}.png?size=1024`;
+    const fg = [], bg = [];
+    if (steam) {
+      if (cfg.style === "logo") { fg.push(S("logo.png")); bg.push(S("library_hero.jpg")); }
+      fg.push(S("library_600x900_2x.jpg"), S("library_600x900.jpg"), S("header.jpg"));
+      bg.push(S("library_hero.jpg"), S("library_600x900.jpg"));
+    }
+    fg.push(D(app?.icon), rpAsset(act.application_id, act.assets?.large_image), D(app?.cover_image));
+    return { fg: fg.filter(Boolean), bg: bg.filter(Boolean) };
+  }
+
+  function firstLoadable(urls) {
+    return urls.reduce((p, url) => p.catch(() => new Promise((ok, fail) => {
+      const img = new Image();
+      img.onload = () => ok(img);
+      img.onerror = fail;
+      img.src = url;
+    })), Promise.reject());
+  }
+
+  // ---------------- rendering ----------------
+  document.body.classList.toggle("fill", cfg.style === "fill");
+  document.body.classList.toggle("logo", cfg.style === "logo");
+  document.body.classList.toggle("noinfo", !cfg.info);
+
+  function show(layer) {
+    for (const l of [els.idle, els.text, els.art]) l.classList.toggle("hidden", l !== layer);
+  }
+
+  let current = null;   // key of what's on screen, so we only swap art when it changes
+  let startedAt = null;
+
+  async function render(presence) {
+    const game = presence?.activities?.find((a) => a.type === 0);
+    const song = cfg.music && presence?.listening_to_spotify ? presence.spotify : null;
+
+    if (game) {
+      const key = "g:" + (game.application_id || game.name);
+      startedAt = game.timestamps?.start ?? null;
+      els.name.textContent = game.name;
+      if (key === current) return;
+      current = key;
+      try {
+        const { fg, bg } = await artFor(game);
+        const img = await firstLoadable(fg);
+        if (current !== key) return;
+        const bgImg = bg.length ? await firstLoadable(bg).catch(() => img) : img;
+        if (current !== key) return;
+        els.fg.src = img.src;
+        els.fg.classList.toggle("square", Math.abs(img.naturalWidth / img.naturalHeight - 1) < .15);
+        els.bg.style.backgroundImage = `url("${bgImg.src}")`;
+        show(els.art);
+      } catch {
+        if (current !== key) return;
+        els.text.textContent = game.name;
+        show(els.text);
+      }
+    } else if (song) {
+      const key = "s:" + song.track_id;
+      startedAt = null;
+      els.name.textContent = song.song;
+      els.sub.textContent = song.artist;
+      if (key === current) return;
+      current = key;
+      firstLoadable([song.album_art_url]).then((img) => {
+        if (current !== key) return;
+        els.fg.src = img.src;
+        els.fg.classList.add("square");
+        els.bg.style.backgroundImage = `url("${img.src}")`;
+        show(els.art);
+      }).catch(() => {});
+    } else {
+      current = null;
+      startedAt = null;
+      show(els.idle);
+    }
+  }
+
+  function tick() {
+    const now = new Date();
+    document.querySelector("#idle .clock").textContent =
+      now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(/\s?[AP]M$/i, "");
+    document.querySelector("#idle .date").textContent =
+      now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+    if (startedAt) {
+      const m = Math.floor((Date.now() - startedAt) / 60000);
+      els.sub.textContent = m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+    } else if (current?.startsWith("g:")) {
+      els.sub.textContent = "Playing";
+    }
+  }
+  setInterval(tick, 1000);
+  tick();
+
+  // ---------------- Lanyard live connection ----------------
+  let ws, heartbeat, retry = 1000;
+  const setStatus = (t) => { const s = $("status"); if (s) s.textContent = t; };
+
+  function connect() {
+    // ?demo=<discord app id> renders a fake game without Discord, for testing layouts.
+    if (params.get("demo")) {
+      current = null;
+      render({ activities: [{ type: 0, name: "Demo game", application_id: params.get("demo"),
+        timestamps: { start: Date.now() - 83 * 60000 } }] });
+      return;
+    }
+    clearInterval(heartbeat);
+    if (ws) { ws.onclose = null; ws.close(); }
+    current = null;
+    render(null);
+    if (!/^\d{15,21}$/.test(cfg.user)) { setStatus("Enter your user ID to start."); return; }
+
+    ws = new WebSocket("wss://api.lanyard.rest/socket");
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.op === 1) {
+        heartbeat = setInterval(() => ws.send(JSON.stringify({ op: 3 })), msg.d.heartbeat_interval);
+        ws.send(JSON.stringify({ op: 2, d: { subscribe_to_id: cfg.user } }));
+      } else if (msg.op === 0 && (msg.t === "INIT_STATE" || msg.t === "PRESENCE_UPDATE")) {
+        retry = 1000;
+        const game = msg.d?.activities?.find((a) => a.type === 0);
+        setStatus(msg.d?.discord_user
+          ? `Connected as ${msg.d.discord_user.username}. ${game ? "Playing " + game.name : "Not playing anything right now."}`
+          : "Connected, but Lanyard doesn't know this user. Did you join the Lanyard server?");
+        render(msg.d);
+      }
+    };
+    ws.onclose = () => {
+      clearInterval(heartbeat);
+      setStatus("Connection lost, retrying…");
+      setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 60000);
+    };
+  }
+  connect();
+
+  // ---------------- setup page ----------------
+  if (onKraken) return;
+  document.body.classList.add("setup");
+  const f = { user: $("f-user"), style: $("f-style"), info: $("f-info"), music: $("f-music"), url: $("f-url") };
+  f.user.value = cfg.user; f.style.value = cfg.style; f.info.checked = cfg.info; f.music.checked = cfg.music;
+
+  function buildUrl() {
+    const u = new URL(location.href.split("?")[0]);
+    if (cfg.user) u.searchParams.set("user", cfg.user);
+    if (cfg.style !== "cover") u.searchParams.set("style", cfg.style);
+    if (!cfg.info) u.searchParams.set("info", "0");
+    if (cfg.music) u.searchParams.set("music", "1");
+    f.url.value = u.toString();
+  }
+  function onChange() {
+    cfg.user = f.user.value.trim(); cfg.style = f.style.value;
+    cfg.info = f.info.checked; cfg.music = f.music.checked;
+    store.set("user", cfg.user); store.set("style", cfg.style);
+    store.set("info", cfg.info ? "1" : "0"); store.set("music", cfg.music ? "1" : "0");
+    document.body.classList.toggle("fill", cfg.style === "fill");
+    document.body.classList.toggle("logo", cfg.style === "logo");
+    document.body.classList.toggle("noinfo", !cfg.info);
+    buildUrl();
+    connect(); // style changes pick different art too, so always re-resolve
+  }
+  for (const el of Object.values(f)) el.addEventListener("change", onChange);
+  f.user.addEventListener("input", () => { if (/^\d{15,21}$/.test(f.user.value.trim())) onChange(); });
+  $("copy").onclick = () => { f.url.select(); navigator.clipboard?.writeText(f.url.value); $("copy").textContent = "Copied"; };
+  buildUrl();
+})();
+</script>
+</body>
+</html>
