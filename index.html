@@ -62,6 +62,19 @@
   #info .sub { font-size: 3.2cqmin; color: var(--muted); font-variant-numeric: tabular-nums;
     overflow: hidden; text-overflow: ellipsis; }
 
+  /* music: progress ring around the edge, or a bar under the title */
+  #ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none;
+    transform: rotate(-90deg); }
+  #ring circle { fill: none; stroke-width: 1.6; }
+  #ring .track { stroke: rgba(255,255,255,.15); }
+  #ring .done { stroke: #fff; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+  #screen.prog-ring #ring { display: block; }
+  #bar { display: none; height: .7cqmin; margin-top: 1cqmin; border-radius: 1cqmin;
+    background: rgba(255,255,255,.2); overflow: hidden; min-width: 30cqmin; }
+  #bar div { height: 100%; background: #fff; width: 0; transition: width 1s linear; }
+  #screen.prog-bar #bar { display: block; }
+  #textcard .artist { font-size: 5cqmin; font-weight: 400; color: var(--muted); margin-top: 1.5cqmin; }
+
   #clock { display: grid; place-items: center; text-align: center; }
   #clock .time { font-size: 20cqmin; font-weight: 200; letter-spacing: -.02em;
     font-variant-numeric: tabular-nums; }
@@ -158,6 +171,23 @@
         <label class="check"><input type="checkbox" id="f-date"> Show date</label>
       </div>
       <label id="row-image">Image URL <input id="f-image" placeholder="https://…/picture.jpg"></label>
+      <div id="row-music" class="form">
+        <label>Album art style
+          <select id="f-musicStyle">
+            <option value="box">Box: album cover as a box</option>
+            <option value="fill">Fill: album art fills the screen</option>
+            <option value="smart">Smart zoom: album art zoomed to the best part</option>
+          </select>
+        </label>
+        <label>Progress
+          <select id="f-progress">
+            <option value="ring">Ring around the edge</option>
+            <option value="bar">Bar under the title</option>
+            <option value="off">Hidden</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="f-musicInfo"> Show song title and artist</label>
+      </div>
       <div class="hint" id="row-media">
         Reads what Windows is playing (Apple Music, browsers, most players) through the small
         <a href="https://github.com/slaterdamian/kraken-game-art#music-on-this-pc" target="_blank" rel="noopener">media bridge</a>
@@ -182,8 +212,9 @@
         <div id="smart" class="layer"></div>
         <img id="fg" alt="">
         <div id="dim" class="layer"></div>
-        <div id="info"><div class="name"></div><div class="sub"></div></div>
+        <div id="info"><div class="name"></div><div class="sub"></div><div id="bar"><div></div></div></div>
       </div>
+      <svg id="ring" viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="48.6"/><circle class="done" cx="50" cy="50" r="48.6" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/></svg>
     </div>
     <div class="seg" id="preview-mode">
       <button data-v="live" class="on">Live</button><button data-v="game">Example game</button><button data-v="idle">Idle</button>
@@ -200,10 +231,11 @@
 (() => {
   const params = new URLSearchParams(location.search);
   const onKraken = params.get("kraken") === "1";
-  const BRIDGE = "http://localhost:8766";
+  const BRIDGE = params.get("bridge") || "http://localhost:8766";
   const CFG_KEY = "kga.config";
   const DEFAULTS = { user: "", style: "box", iconSize: 70, info: true,
-    idle: "clock", clock24: false, date: true, image: "" };
+    idle: "clock", clock24: false, date: true, image: "",
+    musicStyle: "box", progress: "ring", musicInfo: true };
 
   const ls = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -217,7 +249,8 @@
     if (params.has("user")) url.user = params.get("user");
     if (params.has("style")) url.style = OLD_STYLES[params.get("style")] ?? params.get("style");
     if (params.has("info")) url.info = params.get("info") !== "0";
-    for (const k of ["idle", "image"]) if (params.has(k)) url[k] = params.get(k);
+    for (const k of ["idle", "image", "musicStyle", "progress"]) if (params.has(k)) url[k] = params.get(k);
+    if (params.has("musicInfo")) url.musicInfo = params.get("musicInfo") !== "0";
     if (params.has("iconSize")) url.iconSize = +params.get("iconSize");
     if (params.has("clock24")) url.clock24 = params.get("clock24") === "1";
     if (params.has("date")) url.date = params.get("date") !== "0";
@@ -411,11 +444,14 @@
     startedAt = scene.kind === "game" ? game.timestamps?.start ?? null : null;
     if (scene.kind === "game") { els.name.textContent = game.name; subText = "Playing"; }
     if (scene.kind === "last") { els.name.textContent = scene.act.name; subText = "Last played " + ago(scene.act.at); }
-    if (scene.kind === "media") { els.name.textContent = media.title; subText = [media.artist, media.app].filter(Boolean).join(" · "); }
+    if (scene.kind === "media") { els.name.textContent = media.title; subText = media.artist || media.album || media.app || ""; }
+    $("screen").classList.toggle("prog-ring", scene.kind === "media" && cfg.progress === "ring" && media.duration > 0);
+    $("screen").classList.toggle("prog-bar", scene.kind === "media" && cfg.progress === "bar" && media.duration > 0 && cfg.musicInfo);
     tick();
 
     const key = JSON.stringify([scene.kind, scene.act?.application_id ?? scene.act?.name, scene.style,
-      scene.media && [scene.media.title, scene.media.art], scene.url, cfg.iconSize, cfg.info]);
+      scene.media && [scene.media.title, scene.media.art], scene.url, cfg.iconSize, cfg.info,
+      cfg.musicStyle, cfg.musicInfo]);
     if (key === sceneKey) return;
     sceneKey = key;
     const stale = () => sceneKey !== key;
@@ -429,8 +465,10 @@
         const bgImg = art.bg ? await firstLoadable(art.bg).catch(() => null) : null;
         if (!stale()) await paintArt(art.mode, img, bgImg, { dim: scene.kind === "last" });
       } else if (scene.kind === "media") {
+        if (!scene.media.art) throw new Error("no art");
         const img = await firstLoadable([BRIDGE + scene.media.art]);
-        if (!stale()) await paintArt("square", img, null);
+        const mode = { box: "square", fill: "fill", smart: "smart" }[cfg.musicStyle] ?? "square";
+        if (!stale()) await paintArt(mode, img, null, { info: cfg.musicInfo });
       } else if (scene.kind === "image") {
         const img = await firstLoadable([scene.url]);
         if (!stale()) await paintArt("fill", img, null, { info: false });
@@ -438,6 +476,12 @@
     } catch {
       if (stale()) return;
       if (scene.act) { els.text.textContent = scene.act.name; show(els.text); }
+      else if (scene.media) { // no artwork: title and artist on their own
+        els.text.replaceChildren(Object.assign(document.createElement("div"), { textContent: scene.media.title }));
+        els.text.firstChild.append(Object.assign(document.createElement("div"),
+          { className: "artist", textContent: scene.media.artist || scene.media.app || "" }));
+        show(els.text);
+      }
       else show(els.clock);
     }
   }
@@ -454,6 +498,12 @@
       els.sub.textContent = m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
     } else {
       els.sub.textContent = subText;
+    }
+    if (media?.duration > 0) {
+      const pos = media.position + (media.playing && media.at ? (Date.now() - media.at) / 1000 : 0);
+      const pct = Math.max(0, Math.min(100, (pos / media.duration) * 100));
+      document.querySelector("#ring .done").style.strokeDashoffset = 100 - pct;
+      document.querySelector("#bar div").style.width = pct + "%";
     }
   }
   setInterval(tick, 1000);
@@ -533,7 +583,8 @@
   if (onKraken) return;
   document.body.classList.add("setup");
   const f = { user: $("f-user"), style: $("f-style"), iconSize: $("f-iconsize"), info: $("f-info"),
-    idle: $("f-idle"), clock24: $("f-clock24"), date: $("f-date"), image: $("f-image") };
+    idle: $("f-idle"), clock24: $("f-clock24"), date: $("f-date"), image: $("f-image"),
+    musicStyle: $("f-musicStyle"), progress: $("f-progress"), musicInfo: $("f-musicInfo") };
 
   function fillForm(c) {
     for (const [k, el] of Object.entries(f)) el.type === "checkbox" ? (el.checked = c[k]) : (el.value = c[k]);
@@ -550,6 +601,7 @@
     $("row-clock").hidden = !["clock", "media"].includes(cfg.idle);
     $("row-image").hidden = cfg.idle !== "image";
     $("row-media").hidden = cfg.idle !== "media";
+    $("row-music").hidden = cfg.idle !== "media";
     const dirty = JSON.stringify(cfg) !== applied;
     const st = $("apply-state");
     st.textContent = dirty ? "Unsaved changes" : "Applied";

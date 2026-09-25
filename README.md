@@ -38,4 +38,4 @@ Install it once. The bridge copies itself to `%LOCALAPPDATA%\KrakenGameArt` and 
 powershell -ExecutionPolicy Bypass -File media-bridge.ps1 -Install
 ```
 
-Remove it with `-Uninstall`. To check it's working, open http://localhost:8766/media while music plays.
+The album art can be shown as a box, filling the screen, or smart-zoomed, with an optional progress ring or bar. Running `-Install` again updates an existing install. Remove it with `-Uninstall`. To check it's working, open http://localhost:8766/media while music plays.

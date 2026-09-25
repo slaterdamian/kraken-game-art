@@ -18,16 +18,21 @@ $ErrorActionPreference = 'Stop'
 $dest = Join-Path $env:LOCALAPPDATA 'KrakenGameArt'
 $lnk  = Join-Path ([Environment]::GetFolderPath('Startup')) 'Kraken Game Art bridge.lnk'
 
-if ($Uninstall) {
-  Remove-Item $lnk -ErrorAction SilentlyContinue
+function Stop-Bridge {
   Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
     Where-Object { $_.CommandLine -like '*media-bridge.ps1*' -and $_.ProcessId -ne $PID } |
     ForEach-Object { Stop-Process -Id $_.ProcessId }
+}
+
+if ($Uninstall) {
+  Remove-Item $lnk -ErrorAction SilentlyContinue
+  Stop-Bridge
   Write-Host "Removed startup shortcut and stopped the bridge. Files left in $dest."
   return
 }
 
 if ($Install) {
+  Stop-Bridge   # replaces an older running copy
   New-Item -ItemType Directory -Force $dest | Out-Null
   Copy-Item $PSCommandPath (Join-Path $dest 'media-bridge.ps1') -Force
   $page = Join-Path $PSScriptRoot 'index.html'
@@ -55,6 +60,9 @@ function Await($op, [Type]$type) {
 }
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
 $null = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType = WindowsRuntime]
+# PowerShell only sees the thumbnail stream as a bare COM object, so these are called through reflection.
+$asStreamForRead = [System.IO.WindowsRuntimeStreamExtensions].GetMethod('AsStreamForRead', [Type[]]@([Windows.Storage.Streams.IInputStream]))
+$contentTypeProp = [Windows.Storage.Streams.IContentTypeProvider].GetProperty('ContentType')
 $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) `
              ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
 
@@ -79,26 +87,37 @@ function Get-NowPlaying {
   $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
   if (-not $p -or -not $p.Title) { return @{ playing = $false } }
   $key = "$($s.SourceAppUserModelId)|$($p.Title)|$($p.Artist)|$($p.AlbumTitle)"
-  if ($script:art.key -ne $key) {
-    $script:art = @{ key = $key; bytes = $null; type = 'image/jpeg' }
-    if ($p.Thumbnail) {
-      try {
-        $ws = Await ($p.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
-        $ms = New-Object System.IO.MemoryStream
-        [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($ws).CopyTo($ms)
-        $script:art.bytes = $ms.ToArray()
-        if ($ws.ContentType) { $script:art.type = $ws.ContentType }
-      } catch { }
-    }
+  if ($script:art.key -ne $key) { $script:art = @{ key = $key; bytes = $null; type = 'image/jpeg' } }
+  # Players often publish the title before the artwork, so keep trying until we have it.
+  if (-not $script:art.bytes -and $p.Thumbnail) {
+    try {
+      $ws = Await ($p.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+      $ms = New-Object System.IO.MemoryStream
+      $asStreamForRead.Invoke($null, @($ws)).CopyTo($ms)
+      if ($ms.Length -gt 0) { $script:art.bytes = $ms.ToArray() }
+      $ct = "$($contentTypeProp.GetValue($ws))".Split(',')[0]
+      if ($ct) { $script:art.type = $ct }
+    } catch { }
   }
+
+  # Apple Music puts "Artist - Album" (with a long dash) in the artist field and leaves the album empty.
+  $artist = if ($p.Artist) { $p.Artist } else { $p.AlbumArtist }
+  $album = $p.AlbumTitle
+  if (-not $album -and $artist -match "^(.+?) $([char]0x2014) (.+)$") { $artist = $Matches[1]; $album = $Matches[2] }
+
+  $tl = $s.GetTimelineProperties()
+  $epoch = [DateTimeOffset]::new(1970, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
   @{
-    playing = ($status -eq 'Playing')
-    status  = $status
-    title   = $p.Title
-    artist  = if ($p.Artist) { $p.Artist } else { $p.AlbumArtist }
-    album   = $p.AlbumTitle
-    app     = Get-AppName $s.SourceAppUserModelId
-    art     = if ($script:art.bytes) { "/art?v=" + [Math]::Abs($key.GetHashCode()) } else { $null }
+    playing  = ($status -eq 'Playing')
+    status   = $status
+    title    = $p.Title
+    artist   = $artist
+    album    = $album
+    app      = Get-AppName $s.SourceAppUserModelId
+    art      = if ($script:art.bytes) { "/art?v=" + [Math]::Abs($key.GetHashCode()) } else { $null }
+    position = $tl.Position.TotalSeconds
+    duration = ($tl.EndTime - $tl.StartTime).TotalSeconds
+    at       = [long]($tl.LastUpdatedTime - $epoch).TotalMilliseconds   # when position was measured
   }
 }
 
