@@ -32,10 +32,36 @@ Choose one: a clock (12 or 24 hour, date optional), the last game you played (di
 
 A web page can't see what Windows is playing, so this option needs `media-bridge.ps1` running on your PC. It reads the Windows media controls, the same info shown in the volume flyout, so it works with Apple Music, browsers and most players. It serves that info at `http://localhost:8766`.
 
-Install it once. The bridge copies itself to `%LOCALAPPDATA%\KrakenGameArt` and starts hidden at every logon:
+### Install or update
+
+Open PowerShell (Start → type **PowerShell** → Enter) and run these two commands, one at a time.
+
+1. Download the script:
+
+   ```powershell
+   Invoke-WebRequest https://raw.githubusercontent.com/slaterdamian/kraken-game-art/main/media-bridge.ps1 -OutFile "$env:TEMP\media-bridge.ps1"
+   ```
+
+2. Install it. The script copies itself to `%LOCALAPPDATA%\KrakenGameArt`, starts hidden, and adds a Startup shortcut so it runs at every logon:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File "$env:TEMP\media-bridge.ps1" -Install
+   ```
+
+To update later, run the same two commands again. Installing stops the old copy first.
+
+### Check it's working
+
+Play some music, then type `localhost:8766/media` into your browser's address bar. You should see the song's title. If the integration can't reach the bridge, `%LOCALAPPDATA%\KrakenGameArt\bridge.log` lists refused requests and why.
+
+### Uninstall
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File media-bridge.ps1 -Install
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\KrakenGameArt\media-bridge.ps1" -Uninstall
 ```
 
-The album art can be shown as a box, filling the screen, or smart-zoomed, with an optional progress ring or bar. Running `-Install` again updates an existing install. Remove it with `-Uninstall`. To check it's working, type `localhost:8766/media` into your browser's address bar while music plays. If something can't reach it, `%LOCALAPPDATA%\KrakenGameArt\bridge.log` lists refused requests and why.
+This stops the bridge and removes the Startup shortcut.
+
+### Music display options
+
+In the integration's settings, choose **Music playing on this PC** under **When nothing is playing**. The album art can be shown as a box, filling the screen, or smart-zoomed. There's an optional progress ring or bar, coloured from the album art.
