@@ -11,8 +11,12 @@
   Install:  powershell -ExecutionPolicy Bypass -File media-bridge.ps1 -Install
             (copies to %LOCALAPPDATA%\KrakenGameArt and starts it hidden at logon)
   Must run in Windows PowerShell 5.1 (powershell.exe), not PowerShell 7.
+
+  Only answers requests from this PC, and only lets these web pages read it (so other
+  sites you visit can't see what you're listening to): -AllowOrigin to change.
 #>
-param([int]$Port = 8766, [switch]$Install, [switch]$Uninstall)
+param([int]$Port = 8766, [switch]$Install, [switch]$Uninstall,
+      [string[]]$AllowOrigin = @('https://slaterdamian.github.io'))
 
 $ErrorActionPreference = 'Stop'
 $dest = Join-Path $env:LOCALAPPDATA 'KrakenGameArt'
@@ -127,12 +131,30 @@ $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
 Write-Host "Media bridge on http://localhost:$Port  (Ctrl+C to stop)"
 
+# powershell -File passes "a,b" as one string, so split it here.
+$allowed = @($AllowOrigin -split ',' | ForEach-Object { $_.Trim().TrimEnd('/') } | Where-Object { $_ }) + "http://localhost:$Port"
+
+# Who may read the bridge: this PC only, and browsers only from the allowed pages.
+# Requests with no Origin that a browser marks cross-site (e.g. <img> on another site) are refused too;
+# ones without browser headers (typing the URL, curl) are fine.
+function Test-Allowed($req) {
+  if (-not $req.IsLocal) { return $false }
+  $origin = $req.Headers['Origin']
+  if ($origin) { return $allowed -contains $origin }
+  return $req.Headers['Sec-Fetch-Site'] -notin @('cross-site', 'same-site')
+}
+
 function Send($ctx, [byte[]]$body, [string]$type, [int]$code = 200) {
   $r = $ctx.Response
   $r.StatusCode = $code
   $r.ContentType = $type
-  $r.Headers['Access-Control-Allow-Origin'] = '*'
-  $r.Headers['Access-Control-Allow-Private-Network'] = 'true'
+  $origin = $ctx.Request.Headers['Origin']
+  if ($origin -and $allowed -contains $origin) {
+    $r.Headers['Access-Control-Allow-Origin'] = $origin
+    $r.Headers['Access-Control-Allow-Private-Network'] = 'true'
+  }
+  $r.Headers['Vary'] = 'Origin'
+  $r.Headers['X-Content-Type-Options'] = 'nosniff'
   $r.Headers['Cache-Control'] = 'no-store'
   if ($body) { $r.ContentLength64 = $body.Length; $r.OutputStream.Write($body, 0, $body.Length) }
   $r.Close()
@@ -141,7 +163,9 @@ function Send($ctx, [byte[]]$body, [string]$type, [int]$code = 200) {
 while ($listener.IsListening) {
   $ctx = $listener.GetContext()
   try {
+    if (-not (Test-Allowed $ctx.Request)) { Send $ctx $null 'text/plain' 403; continue }
     if ($ctx.Request.HttpMethod -eq 'OPTIONS') { Send $ctx $null 'text/plain' 204; continue }
+    if ($ctx.Request.HttpMethod -ne 'GET') { Send $ctx $null 'text/plain' 405; continue }
     switch ($ctx.Request.Url.AbsolutePath) {
       '/media' {
         $json = Get-NowPlaying | ConvertTo-Json -Compress
@@ -159,6 +183,7 @@ while ($listener.IsListening) {
       default { Send $ctx $null 'text/plain' 404 }
     }
   } catch {
-    try { Send $ctx ([Text.Encoding]::UTF8.GetBytes($_.ToString())) 'text/plain' 500 } catch { }
+    Write-Host "Error: $_"
+    try { Send $ctx $null 'text/plain' 500 } catch { }
   }
 }

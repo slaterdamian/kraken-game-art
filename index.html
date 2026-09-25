@@ -231,7 +231,9 @@
 (() => {
   const params = new URLSearchParams(location.search);
   const onKraken = params.get("kraken") === "1";
-  const BRIDGE = params.get("bridge") || "http://localhost:8766";
+  // ?bridge= only exists for testing another port; it can't point anywhere but this PC.
+  const BRIDGE = /^http:\/\/(localhost|127\.0\.0\.1):\d{2,5}$/.test(params.get("bridge") ?? "")
+    ? params.get("bridge") : "http://localhost:8766";
   const CFG_KEY = "kga.config";
   const DEFAULTS = { user: "", style: "box", iconSize: 70, info: true,
     idle: "clock", clock24: false, date: true, image: "",
@@ -306,6 +308,8 @@
     smartcropLoaded ??= new Promise((ok, fail) => {
       const s = document.createElement("script");
       s.src = "https://cdn.jsdelivr.net/npm/smartcrop@2.0.5/smartcrop.min.js";
+      s.integrity = "sha384-9R7+mrf5LyN8tirIdH1zo/MKQKMUNvapDr1aFzXa2gWa/XrLIR/S/yWUsSt+6UvM";
+      s.crossOrigin = "anonymous";
       s.onload = () => ok(window.smartcrop); s.onerror = fail;
       document.head.appendChild(s);
     });
@@ -330,7 +334,7 @@
   // ---------------- art sources ----------------
   const appCache = new Map();
   function discordApp(id) {
-    if (!id) return Promise.resolve(null);
+    if (!/^\d{1,21}$/.test(id ?? "")) return Promise.resolve(null);
     if (!appCache.has(id)) {
       appCache.set(id, fetch(`https://discord.com/api/v10/applications/${id}/rpc`)
         .then((r) => (r.ok ? r.json() : null)).catch(() => null));
@@ -465,7 +469,7 @@
         const bgImg = art.bg ? await firstLoadable(art.bg).catch(() => null) : null;
         if (!stale()) await paintArt(art.mode, img, bgImg, { dim: scene.kind === "last" });
       } else if (scene.kind === "media") {
-        if (!scene.media.art) throw new Error("no art");
+        if (!/^\/art\?v=\d+$/.test(scene.media.art ?? "")) throw new Error("no art");
         const img = await firstLoadable([BRIDGE + scene.media.art]);
         const mode = { box: "square", fill: "fill", smart: "smart" }[cfg.musicStyle] ?? "square";
         if (!stale()) await paintArt(mode, img, null, { info: cfg.musicInfo });
