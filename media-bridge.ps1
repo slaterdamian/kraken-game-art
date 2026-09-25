@@ -134,14 +134,21 @@ Write-Host "Media bridge on http://localhost:$Port  (Ctrl+C to stop)"
 # powershell -File passes "a,b" as one string, so split it here.
 $allowed = @($AllowOrigin -split ',' | ForEach-Object { $_.Trim().TrimEnd('/') } | Where-Object { $_ }) + "http://localhost:$Port"
 
-# Who may read the bridge: this PC only, and browsers only from the allowed pages.
-# Requests with no Origin that a browser marks cross-site (e.g. <img> on another site) are refused too;
-# ones without browser headers (typing the URL, curl) are fine.
+$log = Join-Path $PSScriptRoot 'bridge.log'
+
+# Who may read the bridge: this PC only. Browsers attach an Origin header whenever a page
+# could read the response (fetch, CORS images), so a foreign Origin is refused; requests
+# without one (opening the URL, clicking a link, plain <img>) can't hand the data to another site.
 function Test-Allowed($req) {
-  if (-not $req.IsLocal) { return $false }
   $origin = $req.Headers['Origin']
-  if ($origin) { return $allowed -contains $origin }
-  return $req.Headers['Sec-Fetch-Site'] -notin @('cross-site', 'same-site')
+  $reason = if (-not $req.IsLocal) { "remote $($req.RemoteEndPoint)" }
+            elseif ($origin -and $allowed -notcontains $origin) { "origin $origin" }
+  if (-not $reason) { return $true }
+  try {
+    if ((Test-Path $log) -and (Get-Item $log).Length -gt 100KB) { Remove-Item $log }
+    Add-Content $log "$(Get-Date -Format s) refused $($req.HttpMethod) $($req.Url.PathAndQuery): $reason"
+  } catch { }
+  return $false
 }
 
 function Send($ctx, [byte[]]$body, [string]$type, [int]$code = 200) {

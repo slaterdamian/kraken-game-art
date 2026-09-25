@@ -67,11 +67,11 @@
     transform: rotate(-90deg); }
   #ring circle { fill: none; stroke-width: 1.6; }
   #ring .track { stroke: rgba(255,255,255,.15); }
-  #ring .done { stroke: #fff; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+  #ring .done { stroke: var(--prog, #fff); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
   #screen.prog-ring #ring { display: block; }
   #bar { display: none; height: .7cqmin; margin-top: 1cqmin; border-radius: 1cqmin;
     background: rgba(255,255,255,.2); overflow: hidden; min-width: 30cqmin; }
-  #bar div { height: 100%; background: #fff; width: 0; transition: width 1s linear; }
+  #bar div { height: 100%; background: var(--prog, #fff); width: 0; transition: width 1s linear; }
   #screen.prog-bar #bar { display: block; }
   #textcard .artist { font-size: 5cqmin; font-weight: 400; color: var(--muted); margin-top: 1.5cqmin; }
 
@@ -186,7 +186,8 @@
             <option value="off">Hidden</option>
           </select>
         </label>
-        <label class="check"><input type="checkbox" id="f-musicInfo"> Show song title and artist</label>
+        <label class="check"><input type="checkbox" id="f-musicInfo"> Show song title, artist and album</label>
+        <label class="check"><input type="checkbox" id="f-accent"> Colour the progress with a highlight from the album art</label>
       </div>
       <div class="hint" id="row-media">
         Reads what Windows is playing (Apple Music, browsers, most players) through the small
@@ -237,7 +238,7 @@
   const CFG_KEY = "kga.config";
   const DEFAULTS = { user: "", style: "box", iconSize: 70, info: true,
     idle: "clock", clock24: false, date: true, image: "",
-    musicStyle: "box", progress: "ring", musicInfo: true };
+    musicStyle: "box", progress: "ring", musicInfo: true, accent: true };
 
   const ls = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -253,6 +254,7 @@
     if (params.has("info")) url.info = params.get("info") !== "0";
     for (const k of ["idle", "image", "musicStyle", "progress"]) if (params.has(k)) url[k] = params.get(k);
     if (params.has("musicInfo")) url.musicInfo = params.get("musicInfo") !== "0";
+    if (params.has("accent")) url.accent = params.get("accent") !== "0";
     if (params.has("iconSize")) url.iconSize = +params.get("iconSize");
     if (params.has("clock24")) url.clock24 = params.get("clock24") === "1";
     if (params.has("date")) url.date = params.get("date") !== "0";
@@ -301,6 +303,42 @@
       const spread = Math.sqrt(px.reduce((s, p) => s + [0, 1, 2].reduce((t, k) => t + (p[k] - avg[k]) ** 2, 0), 0) / px.length / 3);
       return spread < 14 ? { kind: "solid", color: `rgb(${avg.map(Math.round).join(",")})` } : { kind: "busy" };
     } catch { return { kind: "busy" }; }
+  }
+
+  // The most vivid colour in the art (not just the most common one), brightened so it reads on the
+  // display: hues are bucketed and weighted by saturation, ignoring near-black, near-white and grey.
+  function accentColor(img) {
+    try {
+      const n = 48, c = document.createElement("canvas");
+      c.width = c.height = n;
+      const g = c.getContext("2d", { willReadFrequently: true });
+      g.drawImage(img, 0, 0, n, n);
+      const d = g.getImageData(0, 0, n, n).data;
+      const B = 30, bins = Array.from({ length: B }, () => ({ w: 0, h: 0, s: 0, l: 0 }));
+      for (let i = 0; i < d.length; i += 4) {
+        const [h, s, l] = rgbToHsl(d[i], d[i + 1], d[i + 2]);
+        if (s < .3 || l < .18 || l > .9) continue;
+        const w = s * s * s * (1 - Math.abs(l - .55));
+        const b = bins[Math.floor(h * B) % B];
+        b.w += w; b.h += h * w; b.s += s * w; b.l += l * w;
+      }
+      let best = null, bestScore = 0;
+      bins.forEach((b, i) => {
+        const score = b.w + .5 * (bins[(i + 1) % B].w + bins[(i + B - 1) % B].w);
+        if (b.w > 0 && score > bestScore) { best = b; bestScore = score; }
+      });
+      if (!best || bestScore < n * n * .004) return null; // essentially no colour in the art
+      const h = best.h / best.w, s = best.s / best.w, l = best.l / best.w;
+      return `hsl(${Math.round(h * 360)} ${Math.round(Math.min(1, s * 1.1) * 100)}% ${Math.round(Math.max(l, .62) * 100)}%)`;
+    } catch { return null; }
+  }
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, dd = max - min;
+    if (!dd) return [0, 0, l];
+    const s = dd / (1 - Math.abs(2 * l - 1));
+    const h = max === r ? ((g - b) / dd + 6) % 6 : max === g ? (b - r) / dd + 2 : (r - g) / dd + 4;
+    return [h / 6, s, l];
   }
 
   let smartcropLoaded;
@@ -448,14 +486,14 @@
     startedAt = scene.kind === "game" ? game.timestamps?.start ?? null : null;
     if (scene.kind === "game") { els.name.textContent = game.name; subText = "Playing"; }
     if (scene.kind === "last") { els.name.textContent = scene.act.name; subText = "Last played " + ago(scene.act.at); }
-    if (scene.kind === "media") { els.name.textContent = media.title; subText = media.artist || media.album || media.app || ""; }
+    if (scene.kind === "media") { els.name.textContent = media.title; subText = [media.artist, media.album].filter(Boolean).join(" · ") || media.app || ""; }
     $("screen").classList.toggle("prog-ring", scene.kind === "media" && cfg.progress === "ring" && media.duration > 0);
     $("screen").classList.toggle("prog-bar", scene.kind === "media" && cfg.progress === "bar" && media.duration > 0 && cfg.musicInfo);
     tick();
 
     const key = JSON.stringify([scene.kind, scene.act?.application_id ?? scene.act?.name, scene.style,
       scene.media && [scene.media.title, scene.media.art], scene.url, cfg.iconSize, cfg.info,
-      cfg.musicStyle, cfg.musicInfo]);
+      cfg.musicStyle, cfg.musicInfo, cfg.accent]);
     if (key === sceneKey) return;
     sceneKey = key;
     const stale = () => sceneKey !== key;
@@ -472,7 +510,11 @@
         if (!/^\/art\?v=\d+$/.test(scene.media.art ?? "")) throw new Error("no art");
         const img = await firstLoadable([BRIDGE + scene.media.art]);
         const mode = { box: "square", fill: "fill", smart: "smart" }[cfg.musicStyle] ?? "square";
-        if (!stale()) await paintArt(mode, img, null, { info: cfg.musicInfo });
+        if (stale()) return;
+        await paintArt(mode, img, null, { info: cfg.musicInfo });
+        const accent = cfg.accent ? accentColor(img) : null;
+        if (accent) $("screen").style.setProperty("--prog", accent);
+        else $("screen").style.removeProperty("--prog");
       } else if (scene.kind === "image") {
         const img = await firstLoadable([scene.url]);
         if (!stale()) await paintArt("fill", img, null, { info: false });
@@ -588,7 +630,7 @@
   document.body.classList.add("setup");
   const f = { user: $("f-user"), style: $("f-style"), iconSize: $("f-iconsize"), info: $("f-info"),
     idle: $("f-idle"), clock24: $("f-clock24"), date: $("f-date"), image: $("f-image"),
-    musicStyle: $("f-musicStyle"), progress: $("f-progress"), musicInfo: $("f-musicInfo") };
+    musicStyle: $("f-musicStyle"), progress: $("f-progress"), musicInfo: $("f-musicInfo"), accent: $("f-accent") };
 
   function fillForm(c) {
     for (const [k, el] of Object.entries(f)) el.type === "checkbox" ? (el.checked = c[k]) : (el.value = c[k]);
