@@ -1,0 +1,145 @@
+<#
+  Kraken Game Art - media bridge
+  Serves what Windows says is playing (the media flyout / SMTC: Apple Music, browsers,
+  most players) at http://localhost:8766 so the Kraken page can show it.
+
+    /media       -> JSON { playing, title, artist, album, app, art }
+    /art         -> current cover art image
+    /            -> this folder's index.html (so CAM can point at http://localhost:8766/?user=...)
+
+  Run:      powershell -ExecutionPolicy Bypass -File media-bridge.ps1
+  Install:  powershell -ExecutionPolicy Bypass -File media-bridge.ps1 -Install
+            (copies to %LOCALAPPDATA%\KrakenGameArt and starts it hidden at logon)
+  Must run in Windows PowerShell 5.1 (powershell.exe), not PowerShell 7.
+#>
+param([int]$Port = 8766, [switch]$Install, [switch]$Uninstall)
+
+$ErrorActionPreference = 'Stop'
+$dest = Join-Path $env:LOCALAPPDATA 'KrakenGameArt'
+$lnk  = Join-Path ([Environment]::GetFolderPath('Startup')) 'Kraken Game Art bridge.lnk'
+
+if ($Uninstall) {
+  Remove-Item $lnk -ErrorAction SilentlyContinue
+  Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+    Where-Object { $_.CommandLine -like '*media-bridge.ps1*' -and $_.ProcessId -ne $PID } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId }
+  Write-Host "Removed startup shortcut and stopped the bridge. Files left in $dest."
+  return
+}
+
+if ($Install) {
+  New-Item -ItemType Directory -Force $dest | Out-Null
+  Copy-Item $PSCommandPath (Join-Path $dest 'media-bridge.ps1') -Force
+  $page = Join-Path $PSScriptRoot 'index.html'
+  if (Test-Path $page) { Copy-Item $page (Join-Path $dest 'index.html') -Force }
+  $argList = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest\media-bridge.ps1`" -Port $Port"
+  $sh = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+  $sh.TargetPath = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+  $sh.Arguments = $argList
+  $sh.WindowStyle = 7
+  $sh.Save()
+  Start-Process $sh.TargetPath -ArgumentList $argList -WindowStyle Hidden
+  Write-Host "Installed to $dest and started. It will launch at logon. Test: http://localhost:$Port/media"
+  return
+}
+
+# ---------------- WinRT plumbing ----------------
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTaskOp = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+  $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
+function Await($op, [Type]$type) {
+  $task = $asTaskOp.MakeGenericMethod($type).Invoke($null, @($op))
+  $null = $task.Wait(5000)
+  $task.Result
+}
+$null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+$null = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType = WindowsRuntime]
+$mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) `
+             ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+
+function Get-AppName([string]$aumid) {
+  switch -Regex ($aumid) {
+    'AppleMusic|iTunes' { 'Apple Music'; break }
+    'Spotify'           { 'Spotify'; break }
+    'chrome'            { 'Chrome'; break }
+    'msedge|Edge'       { 'Edge'; break }
+    'firefox'           { 'Firefox'; break }
+    'ZuneMusic'         { 'Media Player'; break }
+    default             { ($aumid -replace '^.*[\\/]', '' -replace '\.exe$', '' -replace '_.*$', '') }
+  }
+}
+
+$script:art = @{ key = $null; bytes = $null; type = 'image/jpeg' }
+
+function Get-NowPlaying {
+  $s = $mgr.GetCurrentSession()
+  if (-not $s) { return @{ playing = $false } }
+  $status = $s.GetPlaybackInfo().PlaybackStatus.ToString()
+  $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+  if (-not $p -or -not $p.Title) { return @{ playing = $false } }
+  $key = "$($s.SourceAppUserModelId)|$($p.Title)|$($p.Artist)|$($p.AlbumTitle)"
+  if ($script:art.key -ne $key) {
+    $script:art = @{ key = $key; bytes = $null; type = 'image/jpeg' }
+    if ($p.Thumbnail) {
+      try {
+        $ws = Await ($p.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+        $ms = New-Object System.IO.MemoryStream
+        [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($ws).CopyTo($ms)
+        $script:art.bytes = $ms.ToArray()
+        if ($ws.ContentType) { $script:art.type = $ws.ContentType }
+      } catch { }
+    }
+  }
+  @{
+    playing = ($status -eq 'Playing')
+    status  = $status
+    title   = $p.Title
+    artist  = if ($p.Artist) { $p.Artist } else { $p.AlbumArtist }
+    album   = $p.AlbumTitle
+    app     = Get-AppName $s.SourceAppUserModelId
+    art     = if ($script:art.bytes) { "/art?v=" + [Math]::Abs($key.GetHashCode()) } else { $null }
+  }
+}
+
+# ---------------- HTTP server ----------------
+$listener = New-Object System.Net.HttpListener
+$listener.Prefixes.Add("http://localhost:$Port/")
+$listener.Start()
+Write-Host "Media bridge on http://localhost:$Port  (Ctrl+C to stop)"
+
+function Send($ctx, [byte[]]$body, [string]$type, [int]$code = 200) {
+  $r = $ctx.Response
+  $r.StatusCode = $code
+  $r.ContentType = $type
+  $r.Headers['Access-Control-Allow-Origin'] = '*'
+  $r.Headers['Access-Control-Allow-Private-Network'] = 'true'
+  $r.Headers['Cache-Control'] = 'no-store'
+  if ($body) { $r.ContentLength64 = $body.Length; $r.OutputStream.Write($body, 0, $body.Length) }
+  $r.Close()
+}
+
+while ($listener.IsListening) {
+  $ctx = $listener.GetContext()
+  try {
+    if ($ctx.Request.HttpMethod -eq 'OPTIONS') { Send $ctx $null 'text/plain' 204; continue }
+    switch ($ctx.Request.Url.AbsolutePath) {
+      '/media' {
+        $json = Get-NowPlaying | ConvertTo-Json -Compress
+        Send $ctx ([Text.Encoding]::UTF8.GetBytes($json)) 'application/json; charset=utf-8'
+      }
+      '/art' {
+        if ($script:art.bytes) { Send $ctx $script:art.bytes $script:art.type }
+        else { Send $ctx $null 'text/plain' 404 }
+      }
+      { $_ -in '/', '/index.html' } {
+        $page = Join-Path $PSScriptRoot 'index.html'
+        if (Test-Path $page) { Send $ctx ([IO.File]::ReadAllBytes($page)) 'text/html; charset=utf-8' }
+        else { Send $ctx ([Text.Encoding]::UTF8.GetBytes('index.html not found next to media-bridge.ps1')) 'text/plain' 404 }
+      }
+      default { Send $ctx $null 'text/plain' 404 }
+    }
+  } catch {
+    try { Send $ctx ([Text.Encoding]::UTF8.GetBytes($_.ToString())) 'text/plain' 500 } catch { }
+  }
+}
