@@ -1,0 +1,12 @@
+{
+  "name": "Kraken Game Art",
+  "short_name": "Game Art",
+  "description": "NZXT Kraken LCD web integration: art for the game you're playing, or the music on your PC.",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ],
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "display": "standalone"
+}
