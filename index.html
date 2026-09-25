@@ -59,6 +59,13 @@
     background: rgba(0,0,0,.6); backdrop-filter: blur(2cqmin); white-space: nowrap; display: none; }
   #art.info-on #info { display: block; }
   #info .name { font-size: 4.2cqmin; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  /* text too long for the pill scrubs back and forth instead of being cut off */
+  #info .scrub { text-overflow: clip;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+  #info .scrub > span { display: inline-block; padding: 0 3%;
+    animation: scrub var(--dur) ease-in-out infinite alternate; }
+  @keyframes scrub { 0%, 20% { transform: translateX(0); } 80%, 100% { transform: translateX(var(--dist)); } }
   #info .sub { font-size: 3.2cqmin; color: var(--muted); font-variant-numeric: tabular-nums;
     overflow: hidden; text-overflow: ellipsis; }
 
@@ -484,9 +491,9 @@
 
     // Text that changes without reloading art
     startedAt = scene.kind === "game" ? game.timestamps?.start ?? null : null;
-    if (scene.kind === "game") { els.name.textContent = game.name; subText = "Playing"; }
-    if (scene.kind === "last") { els.name.textContent = scene.act.name; subText = "Last played " + ago(scene.act.at); }
-    if (scene.kind === "media") { els.name.textContent = media.title; subText = [media.artist, media.album].filter(Boolean).join(" · ") || media.app || ""; }
+    if (scene.kind === "game") { setText(els.name, game.name); subText = "Playing"; }
+    if (scene.kind === "last") { setText(els.name, scene.act.name); subText = "Last played " + ago(scene.act.at); }
+    if (scene.kind === "media") { setText(els.name, media.title); subText = [media.artist, media.album].filter(Boolean).join(" · ") || media.app || ""; }
     $("screen").classList.toggle("prog-ring", scene.kind === "media" && cfg.progress === "ring" && media.duration > 0);
     $("screen").classList.toggle("prog-bar", scene.kind === "media" && cfg.progress === "bar" && media.duration > 0 && cfg.musicInfo);
     tick();
@@ -532,6 +539,28 @@
     }
   }
 
+  // Text lives in an inner span so it can slide when it's wider than the pill.
+  function setText(el, text) {
+    if (el.dataset.text === text) return;
+    el.dataset.text = text;
+    el.dataset.fit = "";
+    el.replaceChildren(Object.assign(document.createElement("span"), { textContent: text }));
+  }
+  // Re-measured every tick, since the pill can be hidden (zero width) when the text is set.
+  function fitText(el) {
+    const key = el.dataset.text + "|" + el.clientWidth;
+    if (el.dataset.fit === key) return;
+    el.dataset.fit = key;
+    el.classList.remove("scrub");
+    const over = el.scrollWidth - el.clientWidth;
+    if (el.clientWidth > 0 && over > 1) {
+      el.classList.add("scrub");
+      const dist = el.firstChild.offsetWidth - el.clientWidth;
+      el.style.setProperty("--dist", -dist + "px");
+      el.style.setProperty("--dur", (dist / 40 / .6).toFixed(1) + "s"); // ~40px/s, with a pause at each end
+    }
+  }
+
   function tick() {
     const now = new Date();
     document.querySelector("#clock .time").textContent =
@@ -541,10 +570,12 @@
     date.textContent = now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
     if (startedAt) {
       const m = Math.floor((Date.now() - startedAt) / 60000);
-      els.sub.textContent = m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+      setText(els.sub, m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
     } else {
-      els.sub.textContent = subText;
+      setText(els.sub, subText);
     }
+    fitText(els.name);
+    fitText(els.sub);
     if (media?.duration > 0) {
       const pos = media.position + (media.playing && media.at ? (Date.now() - media.at) / 1000 : 0);
       const pct = Math.max(0, Math.min(100, (pos / media.duration) * 100));
